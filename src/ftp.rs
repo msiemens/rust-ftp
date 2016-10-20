@@ -27,10 +27,26 @@ lazy_static! {
     static ref SIZE_RE: Regex = Regex::new(r"\s+(\d+)\s*$").unwrap();
 }
 
+
+fn set_tcp_timeouts(stream: TcpStream, read_timeout: Option<Duration>, write_timeout: Option<Duration>) -> Result<TcpStream> {
+    match stream.set_read_timeout(read_timeout) {
+        Ok(()) => Ok(stream),
+        Err(e) => Err(FtpError::ConnectionError(e))
+    }.and_then(|stream| {
+        match stream.set_write_timeout(write_timeout) {
+            Ok(()) => Ok(stream),
+            Err(e) => Err(FtpError::ConnectionError(e))
+        }
+    })
+}
+
+
 /// Stream to interface with the FTP server. This interface is only for the command stream.
 #[derive(Debug)]
 pub struct FtpStream {
     reader: BufReader<DataStream>,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
     #[cfg(feature = "secure")]
     ssl_cfg: Option<Ssl>,
 }
@@ -44,6 +60,8 @@ impl FtpStream {
             .and_then(|stream| {
                 let mut ftp_stream = FtpStream {
                     reader: BufReader::new(DataStream::Tcp(stream)),
+                    read_timeout: None,
+                    write_timeout: None,
                 };
                 ftp_stream.read_response(status::READY)
                     .map(|_| ftp_stream)
@@ -58,6 +76,8 @@ impl FtpStream {
             .and_then(|stream| {
                 let mut ftp_stream = FtpStream {
                     reader: BufReader::new(DataStream::Tcp(stream)),
+                    read_timeout: None,
+                    write_timeout: None,
                     ssl_cfg: None,
                 };
                 ftp_stream.read_response(status::READY)
@@ -73,18 +93,13 @@ impl FtpStream {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
             .and_then(|stream| {
-                match stream.set_read_timeout(Some(read_timeout)) {
-                    Ok(()) => Ok(stream),
-                    Err(e) => Err(FtpError::ConnectionError(e))
-                }
-            }).and_then(|stream| {
-                match stream.set_write_timeout(Some(write_timeout)) {
-                    Ok(()) => Ok(stream),
-                    Err(e) => Err(FtpError::ConnectionError(e))
-                }
-            }).and_then(|stream| {
+                set_tcp_timeouts(stream, Some(read_timeout), Some(write_timeout))
+            })
+            .and_then(|stream| {
             let mut ftp_stream = FtpStream {
                     reader: BufReader::new(DataStream::Tcp(stream)),
+                    read_timeout: Some(read_timeout),
+                    write_timeout: Some(write_timeout),
                 };
                 ftp_stream.read_response(status::READY)
                     .map(|_| ftp_stream)
@@ -99,18 +114,13 @@ impl FtpStream {
         TcpStream::connect(addr)
             .map_err(|e| FtpError::ConnectionError(e))
             .and_then(|stream| {
-                match stream.set_read_timeout(Some(read_timeout)) {
-                    Ok(()) => Ok(stream),
-                    Err(e) => Err(FtpError::ConnectionError(e))
-                }
-            }).and_then(|stream| {
-                match stream.set_write_timeout(Some(write_timeout)) {
-                    Ok(()) => Ok(stream),
-                    Err(e) => Err(FtpError::ConnectionError(e))
-                }
-            }).and_then(|stream| {
+                set_tcp_timeouts(stream, Some(read_timeout), Some(write_timeout))
+            })
+            .and_then(|stream| {
                 let mut ftp_stream = FtpStream {
                     reader: BufReader::new(DataStream::Tcp(stream)),
+                    read_timeout: Some(read_timeout),
+                    write_timeout: Some(write_timeout),
                     ssl_cfg: None,
                 };
                 ftp_stream.read_response(status::READY)
@@ -197,6 +207,9 @@ impl FtpStream {
             .and_then(|addr| self.write_str(cmd).map(|_| addr))
             .and_then(|addr| TcpStream::connect(addr)
                       .map_err(|e| FtpError::ConnectionError(e)))
+            .and_then(|stream| {
+                set_tcp_timeouts(stream, self.read_timeout, self.write_timeout)
+            })
             .map(|stream| DataStream::Tcp(stream))
     }
 
@@ -206,6 +219,9 @@ impl FtpStream {
         self.pasv()
             .and_then(|addr| self.write_str(cmd).map(|_| addr))
             .and_then(|addr| TcpStream::connect(addr).map_err(|e| FtpError::ConnectionError(e)))
+            .and_then(|stream| {
+                set_tcp_timeouts(stream, self.read_timeout, self.write_timeout)
+            })
             .and_then(|stream| {
                 match self.ssl_cfg {
                     Some(ref ssl) => {
