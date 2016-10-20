@@ -4,6 +4,7 @@ use std::error::Error;
 use std::net::{TcpStream, SocketAddr};
 use std::string::String;
 use std::str::FromStr;
+use std::time::Duration;
 use std::net::ToSocketAddrs;
 use regex::Regex;
 use chrono::{DateTime, UTC};
@@ -47,8 +48,8 @@ impl FtpStream {
                 ftp_stream.read_response(status::READY)
                     .map(|_| ftp_stream)
             })
-    }
-    
+        }
+
     /// Creates an FTP Stream.
     #[cfg(feature = "secure")]
     pub fn connect<A: ToSocketAddrs>(addr: A) -> Result<FtpStream> {
@@ -63,7 +64,60 @@ impl FtpStream {
                     .map(|_| ftp_stream)
             })
     }
-    
+
+    /// Creates an FTP Stream using the provided timeouts.
+    #[cfg(not(feature = "secure"))]
+    pub fn connect_with_timeouts<A: ToSocketAddrs>(addr: A,
+                                                   read_timeout: Duration,
+                                                   write_timeout: Duration) -> Result<FtpStream> {
+        TcpStream::connect(addr)
+            .map_err(|e| FtpError::ConnectionError(e))
+            .and_then(|stream| {
+                match stream.set_read_timeout(Some(read_timeout)) {
+                    Ok(()) => Ok(stream),
+                    Err(e) => Err(FtpError::ConnectionError(e))
+                }
+            }).and_then(|stream| {
+                match stream.set_write_timeout(Some(write_timeout)) {
+                    Ok(()) => Ok(stream),
+                    Err(e) => Err(FtpError::ConnectionError(e))
+                }
+            }).and_then(|stream| {
+            let mut ftp_stream = FtpStream {
+                    reader: BufReader::new(DataStream::Tcp(stream)),
+                };
+                ftp_stream.read_response(status::READY)
+                    .map(|_| ftp_stream)
+            })
+    }
+
+    /// Creates an FTP Stream using the provided timeouts.
+    #[cfg(feature = "secure")]
+    pub fn connect_with_timeouts<A: ToSocketAddrs>(addr: A,
+                                                   read_timeout: Duration,
+                                                   write_timeout: Duration) -> Result<FtpStream> {
+        TcpStream::connect(addr)
+            .map_err(|e| FtpError::ConnectionError(e))
+            .and_then(|stream| {
+                match stream.set_read_timeout(Some(read_timeout)) {
+                    Ok(()) => Ok(stream),
+                    Err(e) => Err(FtpError::ConnectionError(e))
+                }
+            }).and_then(|stream| {
+                match stream.set_write_timeout(Some(write_timeout)) {
+                    Ok(()) => Ok(stream),
+                    Err(e) => Err(FtpError::ConnectionError(e))
+                }
+            }).and_then(|stream| {
+                let mut ftp_stream = FtpStream {
+                    reader: BufReader::new(DataStream::Tcp(stream)),
+                    ssl_cfg: None,
+                };
+                ftp_stream.read_response(status::READY)
+                    .map(|_| ftp_stream)
+            })
+    }
+
     /// Switch to a secure mode if possible, using a provided SSL configuration.
     /// This method does nothing if the connect is already secured.
     ///
@@ -106,7 +160,7 @@ impl FtpStream {
         try!(secured_ftp_tream.read_response(status::COMMAND_OK));
         Ok(secured_ftp_tream)
     }
-    
+
     /// Switch to insecure mode. If the connection is already
     /// insecure does nothing.
     ///
@@ -135,7 +189,7 @@ impl FtpStream {
         };
         Ok(plain_ftp_stream)
     }
-    
+
     /// Execute command which send data back in a separate stream
     #[cfg(not(feature = "secure"))]
     fn data_command(&mut self, cmd: &str) -> Result<DataStream> {
@@ -374,7 +428,7 @@ impl FtpStream {
     fn list_command(&mut self, cmd: String, open_code: u32, close_code: u32) -> Result<Vec<String>> {
         let mut data_stream = BufReader::new(try!(self.data_command(&cmd)));
         try!(self.read_response_in(&[open_code, status::ALREADY_OPEN]));
-        
+
         let mut lines: Vec<String> = Vec::new();
         let mut line = String::new();
         loop {
